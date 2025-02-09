@@ -7,11 +7,11 @@
 using namespace std;
 
 __global__ void matmul(float* A, float* B, float* output, int m, int n, int s) {
-    int r = blockIdx.x;
-    int c = threadIdx.x;
+    // int r = blockIdx.x;
+    // int c = threadIdx.x;
 
-    // int r = blockIdx.y * blockDim.y + threadIdx.y;
-    // int c = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.y * blockDim.y + threadIdx.y;
+    int c = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (r < m && c < n) {
         // output[r * n + c] = 0;
@@ -98,15 +98,15 @@ int main() {
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    // dim3 blockDim(32, 32);
-    // dim3 gridDim(
-    //     (n + blockDim.x - 1) / blockDim.x,
-    //     (m + blockDim.y - 1) / blockDim.y
-    // );
-    // // call the cuda kernel to perform the operation
-    // matmul<<<gridDim, blockDim>>>(d_a, d_b, d_output, m, n, s);
+    dim3 blockDim(32, 32);
+    dim3 gridDim(
+        (n + blockDim.x - 1) / blockDim.x,
+        (m + blockDim.y - 1) / blockDim.y
+    );
+    // call the cuda kernel to perform the operation
+    matmul<<<gridDim, blockDim>>>(d_a, d_b, d_output, m, n, s);
 
-    matmul<<<m, n>>>(d_a, d_b, d_output, m, n, s);
+    // matmul<<<m, n>>>(d_a, d_b, d_output, m, n, s);
 
     cudaDeviceSynchronize();
 
