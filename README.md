@@ -1,4 +1,4 @@
-# GPU_Kernel
+# GPU_Kernels
 
 Implementation of CUDA & Triton Kernels.
 
