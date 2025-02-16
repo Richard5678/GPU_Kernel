@@ -3,6 +3,7 @@
 #include <iostream>
 #include <chrono>
 #include <stdexcept>
+#include <cublas_v2.h>
 
 using namespace std;
 
@@ -10,109 +11,87 @@ __global__ void matmul(float* A, float* B, float* output, int m, int n, int s) {
     // int r = blockIdx.x;
     // int c = threadIdx.x;
 
-    int r = blockIdx.y * blockDim.y + threadIdx.y;
-    int c = blockIdx.x * blockDim.x + threadIdx.x;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (r < m && c < n) {
-        // output[r * n + c] = 0;
+    if (y < m && x < n) {
+        float temp = 0;
         for (int i = 0; i < s; i++) {
-            output[r * n + c] += A[r * s + i] * B[c + i * n];
+            temp += A[y * s + i] * B[x + i * n];
         }
+        output[y * n + x] = temp;
     }
-}
-
-vector<vector<float>> matmul(vector<vector<float>>& A, vector<vector<float>>& B) {
-    auto start = std::chrono::high_resolution_clock::now();
-    int m = A.size(), n = B[0].size(), s = B.size();
-    vector<vector<float>> output(m, vector<float>(n, 0));
-
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            for (int k = 0; k < s; k++) {
-                output[i][j] += A[i][k] * B[k][j];
-            }
-        }
-    }
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> duration = end - start;
-    std::cout << "Matmul took " << duration.count() << " seconds" << std::endl;
-
-    return output;
 }
 
 
 int main() {
-    int m = 1000, s = 500, n = 700;
-    // int m = 10, s = 5, n = 7;
+    // int m = 1000, s = 500, n = 700;
+    int m = 10, s = 5, n = 7;
+    const unsigned int SEED = 42;
 
-    // Initialize random 2D matrices A and B with correct dimensions
-    vector<vector<float>> A(m, vector<float>(s));
-    vector<vector<float>> B(s, vector<float>(n));
+    vector<float> A(m * s);
+    vector<float> B(s * n);
 
-    // Fill matrices with random float values
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < s; j++) {
-            A[i][j] = static_cast<float>(rand()) / RAND_MAX;
-        }
-    }
-    for(int i = 0; i < s; i++) {
-        for(int j = 0; j < n; j++) {
-            B[i][j] = static_cast<float>(rand()) / RAND_MAX;
-        }
-    }
+    std::mt19937 gen(SEED);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
-    // Flatten 2D vectors into 1D arrays
-    vector<float> A_flat(m * s);
-    vector<float> B_flat(s * n);
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < s; j++) {
-            A_flat[i * s + j] = A[i][j];
-        }
+
+    for(int i = 0; i < A.size(); i++) {
+        A[i] = dist(gen);
     }
-    for(int i = 0; i < s; i++) {
-        for(int j = 0; j < n; j++) {
-            B_flat[i * n + j] = B[i][j];
-        }
+    for(int i = 0; i < B.size(); i++) {
+        B[i] = dist(gen);
     }
     
-    vector<vector<float>> C = matmul(A, B); 
-
-    // Flatten 2D vectors into 1D arrays
-    vector<float> C_flat(m * n);
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < n; j++) {
-            C_flat[i * n + j] = C[i][j];
-        }
-    }
-
     // allocate memory on device
-    float *d_a = nullptr, *d_b = nullptr, *d_output = nullptr;
+    float *d_a = nullptr, *d_b = nullptr, *d_expected_c = nullptr;
     cudaMalloc((void **)&d_a, sizeof(float) * m * s);
     cudaMalloc(&d_b, sizeof(float) * s * n);
-    cudaMalloc(&d_output, sizeof(float) * m * n);
+    cudaMalloc(&d_expected_c, sizeof(float) * m * n);
 
     // cpy input matrix from host to device
-    cudaMemcpy(d_a, A_flat.data(), sizeof(float) * m * s, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, B_flat.data(), sizeof(float) * s * n, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_a, A.data(), sizeof(float) * m * s, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, B.data(), sizeof(float) * s * n, cudaMemcpyHostToDevice);
+
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    cudaDeviceSynchronize();
+
+    float alpha = 1.0f;
+    float beta = 0.0f;
+
+    // Compute expected matrix product using cuBLAS
+    cublasSgemm(handle,
+                CUBLAS_OP_N, CUBLAS_N,
+                n, m, s,
+                &alpha,
+                d_b, n,
+                d_a, s,
+                &beta,
+                d_expected_c, n);
 
 
     auto start = std::chrono::high_resolution_clock::now();
+    const int NUM_ITERATIONS = 100;
 
-    dim3 blockDim(32, 32);
-    dim3 gridDim(
-        (n + blockDim.x - 1) / blockDim.x,
-        (m + blockDim.y - 1) / blockDim.y
-    );
-    // call the cuda kernel to perform the operation
-    matmul<<<gridDim, blockDim>>>(d_a, d_b, d_output, m, n, s);
+    for (int i = 0; i < NUM_ITERATIONS; i++) {
+        dim3 blockDim(32, 32);
+        dim3 gridDim(
+            (n + blockDim.x - 1) / blockDim.x,
+            (m + blockDim.y - 1) / blockDim.y
+        );
+        // call the cuda kernel to perform the operation
+        matmul<<<gridDim, blockDim>>>(d_a, d_b, d_output, m, n, s);
 
-    // matmul<<<m, n>>>(d_a, d_b, d_output, m, n, s);
+        // matmul<<<m, n>>>(d_a, d_b, d_output, m, n, s);
 
+    }
     cudaDeviceSynchronize();
 
     auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> duration = end - start;
-    std::cout << "Matmul took " << duration.count() << " seconds on cuda" << std::endl;
+    std::chrono::duration<double, std::milli> duration = end - start;
+    std::cout << "Matmul took " << (duration.count() / NUM_ITERATIONS) 
+        << " ms on cuda" << std::endl;
 
     // cpy output from device to host
     vector<float> h_output(m * n);
