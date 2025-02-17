@@ -9,8 +9,8 @@
 
 // implementation of naive kernel
 __global__ void matmul(float* A, float* B, float* C, int m, int n, int s) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (y < m && x < n) {
         float temp = 0;
@@ -24,7 +24,6 @@ __global__ void matmul(float* A, float* B, float* C, int m, int n, int s) {
 
 template <typename Func>
 float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int warmupRuns=5, const bool printTime=true) {
-
     for (int i = 0; i < warmupRuns; i++) {
         kernelLaunch();
     }
@@ -58,7 +57,7 @@ float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int war
 
 int main() {
     // int m = 1000, s = 500, n = 700;
-    int m = 10, s = 5, n = 7;
+    const int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
     std::vector<float> A(m * s);
@@ -120,7 +119,7 @@ int main() {
         matmul<<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
     };
 
-    float msElapsed_1 = benchmarkKernel(kernel_1);
+    const float msElapsed_1 = benchmarkKernel(kernel_1);
 
 
 
