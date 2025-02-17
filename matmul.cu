@@ -43,8 +43,8 @@ float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int war
 
 
 int main() {
-    // int m = 1000, s = 500, n = 700;
-    const int m = 10, s = 5, n = 7;
+    int m = 1000, s = 500, n = 700;
+    // const int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
     std::vector<float> A(m * s);
@@ -95,18 +95,32 @@ int main() {
     std::vector<float> h_expected_c(m * n);
     cudaMemcpy(h_expected_c.data(), d_expected_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
 
+    
     dim3 blockDim(32, 32);
-    dim3 gridDim(
+    dim3 gridDimRowMajor(
+        (m + blockDim.x - 1) / blockDim.x,
+        (n + blockDim.y - 1) / blockDim.y
+    );
+    dim3 gridDimColumnMajor(
         (n + blockDim.x - 1) / blockDim.x,
         (m + blockDim.y - 1) / blockDim.y
     );
-
-    // naive Kernel
-    auto kernel_1 = [&]() {
-        matmul<<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    
+    // naive kernel - row major
+    auto kernel_naive_row_major = [&]() {
+        matmul_naive_row_major<<<gridDimRowMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
     };
 
-    const float msElapsed_1 = benchmarkKernel(kernel_1);
+    const float ms_elapsed_naive_row_major = benchmarkKernel(kernel_naive_row_major);
+
+
+    // naive kernel - column major
+    auto kernel_naive_column_major = [&]() {
+        matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    };
+
+    const float ms_elapsed_naive_column_major = benchmarkKernel(kernel_naive_column_major);
+
 
 
 
