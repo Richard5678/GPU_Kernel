@@ -2,15 +2,13 @@
 #include <cassert>
 #include <iostream>
 #include <chrono>
+#include <vector>
 #include <stdexcept>
 #include <cublas_v2.h>
+#include <random> 
 
-using namespace std;
-
-__global__ void matmul(float* A, float* B, float* output, int m, int n, int s) {
-    // int r = blockIdx.x;
-    // int c = threadIdx.x;
-
+// implementation of naive kernel
+__global__ void matmul(float* A, float* B, float* C, int m, int n, int s) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -19,8 +17,42 @@ __global__ void matmul(float* A, float* B, float* output, int m, int n, int s) {
         for (int i = 0; i < s; i++) {
             temp += A[y * s + i] * B[x + i * n];
         }
-        output[y * n + x] = temp;
+        C[y * n + x] = temp;
     }
+}
+
+
+template <typename Func>
+float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int warmupRuns=5, const bool printTime=true) {
+
+    for (int i = 0; i < warmupRuns; i++) {
+        kernelLaunch();
+    }
+    cudaDeviceSynchronize();
+
+    cudaEvent_t start, end;
+    cudaEventCreate(&start);
+    cudaEventCreate(&end);
+
+    cudaEventRecord(start, 0);
+    for (int i = 0; i < iterations; i++) {
+        kernelLaunch();
+    }
+    cudaEventRecord(end, 0);
+    cudaEventSynchronize(end);
+
+    float msElapsed = 0;
+    cudaEventElapsedTime(&msElapsed, start, end);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(end);
+
+    if (printTime) {
+        std::cout << "Matmul took " << msElapsed << " ms on cuda averaged over " 
+            << iterations << " iterations" << std::endl; 
+    }
+
+    return msElapsed / iterations;
 }
 
 
@@ -29,8 +61,8 @@ int main() {
     int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
-    vector<float> A(m * s);
-    vector<float> B(s * n);
+    std::vector<float> A(m * s);
+    std::vector<float> B(s * n);
 
     std::mt19937 gen(SEED);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
@@ -44,10 +76,11 @@ int main() {
     }
     
     // allocate memory on device
-    float *d_a = nullptr, *d_b = nullptr, *d_expected_c = nullptr;
+    float *d_a = nullptr, *d_b = nullptr, *d_expected_c = nullptr, *d_c = nullptr;
     cudaMalloc((void **)&d_a, sizeof(float) * m * s);
     cudaMalloc(&d_b, sizeof(float) * s * n);
     cudaMalloc(&d_expected_c, sizeof(float) * m * n);
+    cudaMalloc(&d_c, sizeof(float) * m * n);
 
     // cpy input matrix from host to device
     cudaMemcpy(d_a, A.data(), sizeof(float) * m * s, cudaMemcpyHostToDevice);
@@ -60,9 +93,9 @@ int main() {
     float alpha = 1.0f;
     float beta = 0.0f;
 
-    // Compute expected matrix product using cuBLAS
+    // compute expected matrix product using cuBLAS
     cublasSgemm(handle,
-                CUBLAS_OP_N, CUBLAS_N,
+                CUBLAS_OP_N, CUBLAS_OP_N,
                 n, m, s,
                 &alpha,
                 d_b, n,
@@ -70,53 +103,52 @@ int main() {
                 &beta,
                 d_expected_c, n);
 
-
-    auto start = std::chrono::high_resolution_clock::now();
-    const int NUM_ITERATIONS = 100;
-
-    for (int i = 0; i < NUM_ITERATIONS; i++) {
-        dim3 blockDim(32, 32);
-        dim3 gridDim(
-            (n + blockDim.x - 1) / blockDim.x,
-            (m + blockDim.y - 1) / blockDim.y
-        );
-        // call the cuda kernel to perform the operation
-        matmul<<<gridDim, blockDim>>>(d_a, d_b, d_output, m, n, s);
-
-        // matmul<<<m, n>>>(d_a, d_b, d_output, m, n, s);
-
-    }
     cudaDeviceSynchronize();
 
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> duration = end - start;
-    std::cout << "Matmul took " << (duration.count() / NUM_ITERATIONS) 
-        << " ms on cuda" << std::endl;
+    // copy expected matrix product from device to host
+    std::vector<float> h_expected_c(m * n);
+    cudaMemcpy(h_expected_c.data(), d_expected_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
+
+    dim3 blockDim(32, 32);
+    dim3 gridDim(
+        (n + blockDim.x - 1) / blockDim.x,
+        (m + blockDim.y - 1) / blockDim.y
+    );
+
+    // naive Kernel
+    auto kernel_1 = [&]() {
+        matmul<<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    };
+
+    float msElapsed_1 = benchmarkKernel(kernel_1);
+
+
+
 
     // cpy output from device to host
-    vector<float> h_output(m * n);
-    cudaMemcpy(h_output.data(), d_output, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
+    std::vector<float> h_c(m * n);
+    cudaMemcpy(h_c.data(), d_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
 
     bool correctness = true;
     // check correctness
     for (int i = 0; i < m * n; i++) {
         try {
-            if (abs(C_flat[i] - h_output[i]) >= 1e-3) {
-                throw runtime_error("Matrix multiplication results don't match!");
+            if (abs(h_expected_c[i] - h_c[i]) >= 1e-3) {
+                throw std::runtime_error("Matrix multiplication results don't match!");
             }
         }
-        catch (const runtime_error& e) {
-            cout << i << " " << C_flat[i] << " " << h_output[i] << endl;
+        catch (const std::runtime_error& e) {
+            std::cout << i << " " << h_expected_c[i] << " " << h_c[i] << std::endl;
             correctness = false;
         }
     }
     if (correctness) {
-        cout << "Implementation was correct!" << endl;
+        std::cout << "Implementation was correct!" << std::endl;
     } else {
-        cout << "Results dont match" << endl;
+        std::cout << "Results dont match" << std::endl;
     } 
 
     cudaFree(d_a);
     cudaFree(d_b);
-    cudaFree(d_output);
+    cudaFree(d_c);
 }
