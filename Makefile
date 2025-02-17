@@ -13,6 +13,9 @@ CU_EXT = .cu
 # Build directory
 BUILD_DIR = build
 
+# File containing kernels implementation
+KERNELS_FILE = matmul_kernels.cu
+
 # Make sure build directory exists
 $(shell mkdir -p $(BUILD_DIR))
 
@@ -29,7 +32,7 @@ help:
 
 # Pattern rule for CUDA files
 %: %$(CU_EXT)
-	$(NVCC) $(NVCC_FLAGS) $(ARCH) $< -o $(BUILD_DIR)/$@
+	$(NVCC) $(NVCC_FLAGS) $(ARCH) $< -o $(BUILD_DIR)/$@ ${KERNELS_FILE}
 	echo "Compiled $(BUILD_DIR)/$@"
 
 # Run compiled executable
