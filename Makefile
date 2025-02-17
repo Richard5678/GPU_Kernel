@@ -4,7 +4,8 @@ NVCC_FLAGS = -lcublas
 # NVCC_FLAGS = 
 
 # Default compute capability
-# ARCH = -arch=sm_86 # for RTX A6000  
+ARCH = -arch=sm_86 # for RTX A6000  
+ARCH = -arch=sm_75 # for Tesla T4
 
 # Source file extension
 CU_EXT = .cu
