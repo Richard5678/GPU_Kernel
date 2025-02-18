@@ -5,13 +5,14 @@
 #include <vector>
 #include <stdexcept>
 #include <cublas_v2.h>
-#include <random> 
-#include "matmul_kernels.h"
-
+#include <random>
+#include "matmul_kernels.cuh"
 
 template <typename Func>
-float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int warmupRuns=5, const bool printTime=true) {
-    for (int i = 0; i < warmupRuns; i++) {
+float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int warmupRuns = 5, const bool printTime = true)
+{
+    for (int i = 0; i < warmupRuns; i++)
+    {
         kernelLaunch();
     }
     cudaDeviceSynchronize();
@@ -21,7 +22,8 @@ float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int war
     cudaEventCreate(&end);
 
     cudaEventRecord(start, 0);
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         kernelLaunch();
     }
     cudaEventRecord(end, 0);
@@ -33,17 +35,19 @@ float benchmarkKernel(Func kernelLaunch, const int iterations=100, const int war
     cudaEventDestroy(start);
     cudaEventDestroy(end);
 
-    if (printTime) {
-        std::cout << "Matmul took " << msElapsed << " ms on cuda averaged over " 
-            << iterations << " iterations" << std::endl; 
+    if (printTime)
+    {
+        std::cout << "Matmul took " << msElapsed << " ms on cuda averaged over "
+                  << iterations << " iterations" << std::endl;
     }
 
     return msElapsed / iterations;
 }
 
-
-int main() {
-    int m = 1000, s = 500, n = 700;
+int main()
+{
+    // int m = 1000, s = 500, n = 700;
+    int m = 64, s = 65, n = 64;
     // const int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
@@ -53,14 +57,15 @@ int main() {
     std::mt19937 gen(SEED);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
 
-
-    for(int i = 0; i < A.size(); i++) {
+    for (int i = 0; i < A.size(); i++)
+    {
         A[i] = dist(gen);
     }
-    for(int i = 0; i < B.size(); i++) {
+    for (int i = 0; i < B.size(); i++)
+    {
         B[i] = dist(gen);
     }
-    
+
     // allocate memory on device
     float *d_a = nullptr, *d_b = nullptr, *d_expected_c = nullptr, *d_c = nullptr;
     cudaMalloc((void **)&d_a, sizeof(float) * m * s);
@@ -95,58 +100,70 @@ int main() {
     std::vector<float> h_expected_c(m * n);
     cudaMemcpy(h_expected_c.data(), d_expected_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
 
-    
     dim3 blockDim(32, 32);
     dim3 gridDimRowMajor(
         (m + blockDim.x - 1) / blockDim.x,
-        (n + blockDim.y - 1) / blockDim.y
-    );
+        (n + blockDim.y - 1) / blockDim.y);
     dim3 gridDimColumnMajor(
         (n + blockDim.x - 1) / blockDim.x,
-        (m + blockDim.y - 1) / blockDim.y
-    );
-    
-    // naive kernel - row major
-    auto kernel_naive_row_major = [&]() {
-        matmul_naive_row_major<<<gridDimRowMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        (m + blockDim.y - 1) / blockDim.y);
+
+    // // naive kernel - row major
+    // auto kernel_naive_row_major = [&]()
+    // {
+    //     matmul_naive_row_major<<<gridDimRowMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    // };
+
+    // const float ms_elapsed_naive_row_major = benchmarkKernel(kernel_naive_row_major);
+
+    // // naive kernel - column major
+    // auto kernel_naive_column_major = [&]()
+    // {
+    //     matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    // };
+
+    // const float ms_elapsed_naive_column_major = benchmarkKernel(kernel_naive_column_major);
+
+    // shared memory block caching
+    auto kernel_smbc = [&]()
+    {
+        matmul_smbc<32><<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
     };
 
-    const float ms_elapsed_naive_row_major = benchmarkKernel(kernel_naive_row_major);
-
-
-    // naive kernel - column major
-    auto kernel_naive_column_major = [&]() {
-        matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    };
-
-    const float ms_elapsed_naive_column_major = benchmarkKernel(kernel_naive_column_major);
-
-
-
-
+    const float ms_elapsed_smbc = benchmarkKernel(kernel_smbc);
 
     // cpy output from device to host
     std::vector<float> h_c(m * n);
     cudaMemcpy(h_c.data(), d_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
 
     bool correctness = true;
+    int num_mismatch_entries = 0;
     // check correctness
-    for (int i = 0; i < m * n; i++) {
-        try {
-            if (abs(h_expected_c[i] - h_c[i]) >= 1e-3) {
+    for (int i = 0; i < m * n; i++)
+    {
+        try
+        {
+            if (abs(h_expected_c[i] - h_c[i]) >= 1e-3)
+            {
                 throw std::runtime_error("Matrix multiplication results don't match!");
             }
         }
-        catch (const std::runtime_error& e) {
+        catch (const std::runtime_error &e)
+        {
             std::cout << i << " " << h_expected_c[i] << " " << h_c[i] << std::endl;
             correctness = false;
+            num_mismatch_entries += 1;
         }
     }
-    if (correctness) {
+    if (correctness)
+    {
         std::cout << "Implementation was correct!" << std::endl;
-    } else {
-        std::cout << "Results dont match" << std::endl;
-    } 
+    }
+    else
+    {
+        std::cout << "Results dont match!" << std::endl;
+        std::cout << num_mismatch_entries << " mismatch entries found" << std::endl;
+    }
 
     cudaFree(d_a);
     cudaFree(d_b);
