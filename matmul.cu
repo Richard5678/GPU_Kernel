@@ -46,8 +46,9 @@ float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int w
 
 int main()
 {
-    // int m = 1000, s = 500, n = 700;
-    int m = 64, s = 65, n = 64;
+    // int m = 5120, s = 5120, n = 5120;
+    int m = 1000, s = 500, n = 700;
+    // int m = 64, s = 65, n = 64;
     // const int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
@@ -116,7 +117,7 @@ int main()
 
     // const float ms_elapsed_naive_row_major = benchmarkKernel(kernel_naive_row_major);
 
-    // // naive kernel - column major
+    // naive kernel - column major
     // auto kernel_naive_column_major = [&]()
     // {
     //     matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
