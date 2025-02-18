@@ -8,14 +8,18 @@
 
 using namespace std;
 
-vector<vector<float>> cpu_matmul(vector<vector<float>>& A, vector<vector<float>>& B) {
+vector<vector<float>> cpu_matmul(vector<vector<float>> &A, vector<vector<float>> &B)
+{
     auto start = std::chrono::high_resolution_clock::now();
     int m = A.size(), n = B[0].size(), s = B.size();
     vector<vector<float>> output(m, vector<float>(n, 0));
 
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            for (int k = 0; k < s; k++) {
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            for (int k = 0; k < s; k++)
+            {
                 output[i][j] += A[i][k] * B[k][j];
             }
         }
@@ -27,7 +31,8 @@ vector<vector<float>> cpu_matmul(vector<vector<float>>& A, vector<vector<float>>
     return output;
 }
 
-int main() {
+int main()
+{
     // Use larger matrices to better demonstrate cuBLAS performance
     int m = 1000, s = 500, n = 700;
 
@@ -41,13 +46,17 @@ int main() {
     vector<vector<float>> B(s, vector<float>(n));
 
     // Fill matrices with random float values
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < s; j++) {
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = 0; j < s; j++)
+        {
             A[i][j] = dis(gen);
         }
     }
-    for(int i = 0; i < s; i++) {
-        for(int j = 0; j < n; j++) {
+    for (int i = 0; i < s; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
             B[i][j] = dis(gen);
         }
     }
@@ -61,20 +70,26 @@ int main() {
     vector<float> C_flat(m * n);
 
     // Flatten A (row-major)
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < s; j++) {
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = 0; j < s; j++)
+        {
             A_flat[i * s + j] = A[i][j];
         }
     }
     // Flatten B (row-major)
-    for(int i = 0; i < s; i++) {
-        for(int j = 0; j < n; j++) {
+    for (int i = 0; i < s; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
             B_flat[i * n + j] = B[i][j];
         }
     }
     // Flatten C for comparison
-    for(int i = 0; i < m; i++) {
-        for(int j = 0; j < n; j++) {
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
             C_flat[i * n + j] = C[i][j];
         }
     }
@@ -92,7 +107,7 @@ int main() {
     // Create cuBLAS handle and warm up GPU
     cublasHandle_t handle;
     cublasCreate(&handle);
-    cudaDeviceSynchronize();  // Ensure GPU is ready
+    cudaDeviceSynchronize(); // Ensure GPU is ready
 
     // Set up and run cuBLAS SGEMM
     float alpha = 1.0f;
@@ -108,11 +123,21 @@ int main() {
                 &beta,
                 d_c, n);
 
+    // cublasSgemm(handle,
+    //         CUBLAS_OP_T, CUBLAS_OP_T,
+    //         m, n, s,
+    //         &alpha,
+    //         d_a, s,
+    //         d_b, n,
+    //         &beta,
+    //         d_c, m);
+
     // Time multiple iterations for more accurate measurement
     const int NUM_ITERATIONS = 100;
     auto start = std::chrono::high_resolution_clock::now();
 
-    for(int i = 0; i < NUM_ITERATIONS; i++) {
+    for (int i = 0; i < NUM_ITERATIONS; i++)
+    {
         cublasSgemm(handle,
                     CUBLAS_OP_N, CUBLAS_OP_N,
                     n, m, s,
@@ -122,11 +147,11 @@ int main() {
                     &beta,
                     d_c, n);
     }
-    cudaDeviceSynchronize();  // Ensure all operations are complete
+    cudaDeviceSynchronize(); // Ensure all operations are complete
 
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end - start;
-    std::cout << "cuBLAS Matmul took " << (duration.count() / NUM_ITERATIONS) << " ms (averaged over " 
+    std::cout << "cuBLAS Matmul took " << (duration.count() / NUM_ITERATIONS) << " ms (averaged over "
               << NUM_ITERATIONS << " iterations)" << std::endl;
 
     // Copy result back to host
@@ -136,20 +161,25 @@ int main() {
     // Verify results
     float max_error = 0.0f;
     bool correct = true;
-    for (int i = 0; i < m * n; i++) {
+    for (int i = 0; i < m * n; i++)
+    {
         float error = abs(C_flat[i] - gpu_result[i]);
         max_error = max(max_error, error);
-        if (error > 1e-3) {
+        if (error > 1e-3)
+        {
             correct = false;
-            cout << "Mismatch at " << i << ": CPU = " << C_flat[i] 
+            cout << "Mismatch at " << i << ": CPU = " << C_flat[i]
                  << ", GPU = " << gpu_result[i] << ", error = " << error << endl;
             break;
         }
     }
 
-    if (correct) {
+    if (correct)
+    {
         cout << "Results match! Maximum error: " << max_error << endl;
-    } else {
+    }
+    else
+    {
         cout << "Results don't match! Maximum error: " << max_error << endl;
     }
 
@@ -160,4 +190,4 @@ int main() {
     cudaFree(d_c);
 
     return 0;
-} 
+}
