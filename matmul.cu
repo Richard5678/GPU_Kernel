@@ -8,6 +8,11 @@
 #include <random>
 #include "matmul_kernels.cuh"
 
+int ceil_div(int a, int b)
+{
+    return (a + b - 1) / b;
+}
+
 template <typename Func>
 float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int warmupRuns = 5, const bool printTime = true)
 {
@@ -104,11 +109,11 @@ int main()
 
     dim3 blockDim(32, 32);
     dim3 gridDimRowMajor(
-        (m + blockDim.x - 1) / blockDim.x,
-        (n + blockDim.y - 1) / blockDim.y);
+        ceil_div(m, blockDim.x),
+        ceil_div(n, blockDim.y));
     dim3 gridDimColumnMajor(
-        (n + blockDim.x - 1) / blockDim.x,
-        (m + blockDim.y - 1) / blockDim.y);
+        ceil_div(n, blockDim.x),
+        ceil_div(m, blockDim.y));
 
     // // naive kernel - row major
     // auto kernel_naive_row_major = [&]()
@@ -139,13 +144,27 @@ int main()
     //     const int BM = 64, BS = 8, BN = 64, TM = 8;
     //     dim3 blockDim(BN, BM / TM);
     //     dim3 gridDim(
-    //         (n + BN - 1) / BN,
-    //         (m + BM - 1) / BM);
+    //         ceil_div(n, BN),
+    //         ceil_div(m, BM));
 
     //     matmul_1D_block_tiling<BM, BS, BN, TM><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
     // };
 
     // const float ms_elapsed_1D_block_tiling = benchmarkKernel(kernel_1D_block_tiling);
+
+    // 2D block tiling
+    auto kernel_2D_block_tiling = [&]()
+    {
+        const int BM = 128, BS = 8, BN = 128, TM = 8, TN = 8;
+        dim3 blockDim(BN / TN, BM / TM);
+        dim3 gridDim(
+            ceil_div(n, BN),
+            ceil_div(m, BM));
+
+        matmul_2D_block_tiling<BM, BS, BN, TM, TN><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    };
+
+    const float ms_elapsed_2d_block_tiling = benchmarkKernel(kernel_2D_block_tiling);
 
     // cpy output from device to host
     std::vector<float> h_c(m * n);
