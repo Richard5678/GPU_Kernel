@@ -1,8 +1,10 @@
+#include <stdio.h>
+
 // Implementation of naive kernel with column major storage format
 __global__ void matmul_naive_column_major(float *A, float *B, float *C, int m, int n, int s)
 {
-    const unsigned int col = blockIdx.x * blockDim.x + threadIdx.x;
-    const unsigned int row = blockIdx.y * blockDim.y + threadIdx.y;
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (row < m && col < n)
     {
@@ -18,8 +20,8 @@ __global__ void matmul_naive_column_major(float *A, float *B, float *C, int m, i
 // Implementation of naive kernel with row major storage format
 __global__ void matmul_naive_row_major(float *A, float *B, float *C, int m, int n, int s)
 {
-    const unsigned int row = blockIdx.x * blockDim.x + threadIdx.x;
-    const unsigned int col = blockIdx.y * blockDim.y + threadIdx.y;
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    const int col = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (row < m && col < n)
     {
@@ -33,11 +35,13 @@ __global__ void matmul_naive_row_major(float *A, float *B, float *C, int m, int 
 }
 
 // Shared memory block caching (smbc)
+//      - blockDim(BLOCK_SIZE, BLOCK_SIZE)
+//      - gridDim(n / blockDim.x, m / blockDim.y)
 template <const int BLOCK_SIZE>
-__global__ void matmul_smbc(float* A, float* B, float* C, int m, int n, int s) 
+__global__ void matmul_smbc(float *A, float *B, float *C, int m, int n, int s)
 {
-    const uint col = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint row = blockIdx.y * blockDim.y + threadIdx.y;
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
 
     __shared__ float As[BLOCK_SIZE * BLOCK_SIZE];
     __shared__ float Bs[BLOCK_SIZE * BLOCK_SIZE];
@@ -47,15 +51,15 @@ __global__ void matmul_smbc(float* A, float* B, float* C, int m, int n, int s)
     // start_idx: starting index of the block along the tile direction
     //      - Horizontal for A
     //      - Vertical for B
-    for (int start_idx = 0; start_idx < s; start_idx += BLOCK_SIZE) 
+    for (int start_idx = 0; start_idx < s; start_idx += BLOCK_SIZE)
     {
         // 1D index of the current thread in the block
-        const uint idx_in_block = threadIdx.y * BLOCK_SIZE + threadIdx.x;
+        const int idx_in_block = threadIdx.y * BLOCK_SIZE + threadIdx.x;
 
         // For matrix A:
         //      - row index is 'row'
-        //      - col index is 'start_idx + threadIdx.x'    
-        if (row < m && (start_idx + threadIdx.x) < s) 
+        //      - col index is 'start_idx + threadIdx.x'
+        if (row < m && (start_idx + threadIdx.x) < s)
             As[idx_in_block] = A[row * s + (start_idx + threadIdx.x)];
         else
             As[idx_in_block] = 0.0f;
@@ -71,7 +75,7 @@ __global__ void matmul_smbc(float* A, float* B, float* C, int m, int n, int s)
         __syncthreads();
 
         // Accumulate partial dot product for the current tile
-        for (int i = 0; i < BLOCK_SIZE; i++) 
+        for (int i = 0; i < BLOCK_SIZE; i++)
         {
             temp += As[threadIdx.y * BLOCK_SIZE + i] * Bs[threadIdx.x + i * BLOCK_SIZE];
         }
@@ -80,5 +84,68 @@ __global__ void matmul_smbc(float* A, float* B, float* C, int m, int n, int s)
     }
 
     // Update output if within bound
-    if (row < m && col < n) C[row * n + col] = temp;
+    if (row < m && col < n)
+        C[row * n + col] = temp;
+}
+
+// 1D block tiling
+//      - blockDim(BN, BM / TM)
+//      - gridDim(N / BN, M / BM)
+// requires:
+//      - BM = BN = BS * TM
+template <const int BM, const int BS, const int BN, const int TM>
+__global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int n, int s)
+{
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * BM + threadIdx.y * TM;
+
+    __shared__ float As[BM * BS];
+    __shared__ float Bs[BS * BN];
+
+    float output[TM] = {0.0f};
+
+    for (int start_idx = 0; start_idx < s; start_idx += BS)
+    {
+        const int idx_in_block_a = threadIdx.x * BS + threadIdx.y;
+        if ((blockIdx.y * BM + threadIdx.x) < m && (start_idx + threadIdx.y) < s)
+        {
+            As[idx_in_block_a] = A[(blockIdx.y * BM + threadIdx.x) * s + (start_idx + threadIdx.y)];
+        }
+        else
+        {
+            As[idx_in_block_a] = 0.0f;
+        }
+
+        const int idx_in_block_b = threadIdx.y * BN + threadIdx.x;
+        if ((start_idx + threadIdx.y) < s && col < n)
+        {
+            Bs[idx_in_block_b] = B[(start_idx + threadIdx.y) * n + col];
+        }
+        else
+        {
+            Bs[idx_in_block_b] = 0.0f;
+        }
+
+        __syncthreads();
+
+        for (int i = 0; i < BS; i++)
+        {
+            const float B_val = Bs[i * BN + threadIdx.x];
+            for (int j = 0; j < TM; j++)
+            {
+                output[j] += As[(threadIdx.y * TM + j) * BS + i] * B_val;
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // Add bounds checking when writing output
+    for (int j = 0; j < TM; j++)
+    {
+        if (row + j < m && col < n) // Add bounds check here
+        {
+            C[(row + j) * n + col] = output[j];
+        }
+    }
 }
