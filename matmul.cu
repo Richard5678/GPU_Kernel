@@ -9,8 +9,8 @@
 #include "matmul_kernels.cuh"
 #include "utils.cc"
 
-const int ITERATIONS = 100;
-const int WARMUPS = 5;
+const int ITERATIONS = 10;
+const int WARMUPS = 3;
 
 enum class KernelImpl
 {
@@ -282,6 +282,7 @@ void runKernel(KernelImpl kernel)
 int main()
 {
     // Pass enum value to function
-    runKernel(KernelImpl::TWO_D_BLOCK_TILING);
+    // runKernel(KernelImpl::TWO_D_BLOCK_TILING);
+    runKernel(KernelImpl::ONE_D_BLOCK_TILING);
     return 0;
 }
