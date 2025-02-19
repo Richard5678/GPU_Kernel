@@ -37,7 +37,7 @@ float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int w
 
     if (printTime)
     {
-        std::cout << "Matmul took " << msElapsed << " ms on cuda averaged over "
+        std::cout << "Matmul took " << (msElapsed / iterations) << " ms on cuda averaged over "
                   << iterations << " iterations" << std::endl;
     }
 
@@ -46,9 +46,10 @@ float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int w
 
 int main()
 {
-    // int m = 5120, s = 5120, n = 5120;
-    int m = 1000, s = 500, n = 700;
-    // int m = 64, s = 65, n = 64;
+    int m = 5120, s = 5120, n = 5120;
+    // int m = 1000, s = 500, n = 700;
+    // int m = 73, s = 150, n = 351;
+    // int m = 130, s = 130, n = 130;
     // const int m = 10, s = 5, n = 7;
     const unsigned int SEED = 42;
 
@@ -126,12 +127,25 @@ int main()
     // const float ms_elapsed_naive_column_major = benchmarkKernel(kernel_naive_column_major);
 
     // shared memory block caching
-    auto kernel_smbc = [&]()
-    {
-        matmul_smbc<32><<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    };
+    // auto kernel_smbc = [&]()
+    // {
+    //     matmul_smbc<32><<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    // };
+    // const float ms_elapsed_smbc = benchmarkKernel(kernel_smbc);
 
-    const float ms_elapsed_smbc = benchmarkKernel(kernel_smbc);
+    // 1D block tiling
+    // auto kernel_1D_block_tiling = [&]()
+    // {
+    //     const int BM = 64, BS = 8, BN = 64, TM = 8;
+    //     dim3 blockDim(BN, BM / TM);
+    //     dim3 gridDim(
+    //         (n + BN - 1) / BN,
+    //         (m + BM - 1) / BM);
+
+    //     matmul_1D_block_tiling<BM, BS, BN, TM><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+    // };
+
+    // const float ms_elapsed_1D_block_tiling = benchmarkKernel(kernel_1D_block_tiling);
 
     // cpy output from device to host
     std::vector<float> h_c(m * n);
