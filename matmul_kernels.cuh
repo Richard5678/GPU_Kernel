@@ -187,8 +187,6 @@ __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int 
     __shared__ float Bs[BS * BN];
 
     float output[TM * TN] = {0.0f};
-    float regM[TM] = {0.0f};
-    float regN[TN] = {0.0f};
 
     for (int start_idx = 0; start_idx < s; start_idx += BS)
     {
@@ -225,30 +223,30 @@ __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int 
 
         __syncthreads();
 
-        // accumulate partial dot product for 2D block tile
+// Optimized computation loop
+#pragma unroll
         for (int bsOffset = 0; bsOffset < BS; bsOffset++)
         {
-            for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+            // Load B values into registers once
+            float regB[TN];
+
+#pragma unroll
+            for (int tn = 0; tn < TN; tn++)
             {
-                if (threadRow_a + tmOffset < BM)
-                {
-                    regM[tmOffset] = As[(threadRow_a + tmOffset) * BS + bsOffset];
-                }
+                regB[tn] = Bs[bsOffset * BN + (threadCol_b + tn)];
             }
 
-            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+// Process one row of A at a time
+#pragma unroll
+            for (int tm = 0; tm < TM; tm++)
             {
-                if (threadCol_b + tnOffset < BN)
-                {
-                    regN[tnOffset] = Bs[bsOffset * BN + (threadCol_b + tnOffset)];
-                }
-            }
+                float regA = As[(threadRow_a + tm) * BS + bsOffset];
 
-            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
-            {
-                for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+// Multiply with all columns of B
+#pragma unroll
+                for (int tn = 0; tn < TN; tn++)
                 {
-                    output[tmOffset * TN + tnOffset] += regM[tmOffset] * regN[tnOffset];
+                    output[tm * TN + tn] += regA * regB[tn];
                 }
             }
         }
