@@ -7,14 +7,29 @@
 #include <cublas_v2.h>
 #include <random>
 #include "matmul_kernels.cuh"
+#include "utils.cc"
 
-int ceil_div(int a, int b)
+const int ITERATIONS = 100;
+const int WARMUPS = 5;
+
+enum class KernelImpl
 {
-    return (a + b - 1) / b;
-}
+    NAIVE_ROW_MAJOR,
+    NAIVE_COLUMN_MAJOR,
+    SMBC,
+    ONE_D_BLOCK_TILING,
+    TWO_D_BLOCK_TILING,
+};
 
 template <typename Func>
-float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int warmupRuns = 5, const bool printTime = true)
+std::pair<const float, const float> benchmarkKernel(
+    Func kernelLaunch,
+    const float m,
+    const float n,
+    const float s,
+    const int iterations = ITERATIONS,
+    const int warmupRuns = WARMUPS,
+    const bool printMetrics = false)
 {
     for (int i = 0; i < warmupRuns; i++)
     {
@@ -40,16 +55,21 @@ float benchmarkKernel(Func kernelLaunch, const int iterations = 100, const int w
     cudaEventDestroy(start);
     cudaEventDestroy(end);
 
-    if (printTime)
+    const float avgMsElapsed = msElapsed / iterations;
+
+    float gflops = calculateGFLOPS(m, n, s, avgMsElapsed);
+
+    if (printMetrics)
     {
-        std::cout << "Matmul took " << (msElapsed / iterations) << " ms on cuda averaged over "
+        std::cout << "Matmul took " << avgMsElapsed << " ms on cuda averaged over "
                   << iterations << " iterations" << std::endl;
+        std::cout << "Performance: " << gflops << " GFLOPS" << std::endl;
     }
 
-    return msElapsed / iterations;
+    return std::make_pair(avgMsElapsed, gflops);
 }
 
-int main()
+void runKernel(KernelImpl kernel)
 {
     int m = 5120, s = 5120, n = 5120;
     // int m = 1000, s = 500, n = 700;
@@ -107,6 +127,29 @@ int main()
     std::vector<float> h_expected_c(m * n);
     cudaMemcpy(h_expected_c.data(), d_expected_c, sizeof(float) * m * n, cudaMemcpyDeviceToHost);
 
+    auto kernel_cublas = [&]()
+    {
+        // cublasHandle_t handle;
+        // cublasCreate(&handle);
+        // float alpha = 1.0f;
+        // float beta = 0.0f;
+
+        cublasSgemm(handle,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    n, m, s,
+                    &alpha,
+                    d_b, n,
+                    d_a, s,
+                    &beta,
+                    d_c, n);
+    };
+
+    auto [ms_elapsed_cublas, gflops_cublas] = benchmarkKernel(kernel_cublas, m, n, s);
+
+    std::cout << "cuBLAS matmul took " << ms_elapsed_cublas << " ms on cuda averaged over "
+                  << ITERATIONS << " iterations" << std::endl;
+        std::cout << "Performance: " << gflops_cublas << " GFLOPS" << std::endl;
+
     dim3 blockDim(32, 32);
     dim3 gridDimRowMajor(
         ceil_div(m, blockDim.x),
@@ -115,56 +158,88 @@ int main()
         ceil_div(n, blockDim.x),
         ceil_div(m, blockDim.y));
 
+    float ms_elapsed = 0, gflops = 0;
     // // naive kernel - row major
-    // auto kernel_naive_row_major = [&]()
-    // {
-    //     matmul_naive_row_major<<<gridDimRowMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    // };
-
-    // const float ms_elapsed_naive_row_major = benchmarkKernel(kernel_naive_row_major);
-
-    // naive kernel - column major
-    // auto kernel_naive_column_major = [&]()
-    // {
-    //     matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    // };
-
-    // const float ms_elapsed_naive_column_major = benchmarkKernel(kernel_naive_column_major);
-
-    // shared memory block caching
-    // auto kernel_smbc = [&]()
-    // {
-    //     matmul_smbc<32><<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    // };
-    // const float ms_elapsed_smbc = benchmarkKernel(kernel_smbc);
-
-    // 1D block tiling
-    // auto kernel_1D_block_tiling = [&]()
-    // {
-    //     const int BM = 64, BS = 8, BN = 64, TM = 8;
-    //     dim3 blockDim(BN, BM / TM);
-    //     dim3 gridDim(
-    //         ceil_div(n, BN),
-    //         ceil_div(m, BM));
-
-    //     matmul_1D_block_tiling<BM, BS, BN, TM><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    // };
-
-    // const float ms_elapsed_1D_block_tiling = benchmarkKernel(kernel_1D_block_tiling);
-
-    // 2D block tiling
-    auto kernel_2D_block_tiling = [&]()
+    switch (kernel)
     {
-        const int BM = 128, BS = 8, BN = 128, TM = 8, TN = 8;
-        dim3 blockDim(BN / TN, BM / TM);
-        dim3 gridDim(
-            ceil_div(n, BN),
-            ceil_div(m, BM));
+    case KernelImpl::NAIVE_ROW_MAJOR:
+    {
+        auto kernel_naive_row_major = [&]()
+        {
+            matmul_naive_row_major<<<gridDimRowMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
 
-        matmul_2D_block_tiling<BM, BS, BN, TM, TN><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
-    };
+        auto metrics = benchmarkKernel(kernel_naive_row_major, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+    case KernelImpl::NAIVE_COLUMN_MAJOR:
+    {
+        auto kernel_naive_column_major = [&]()
+        {
+            matmul_naive_column_major<<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
 
-    const float ms_elapsed_2d_block_tiling = benchmarkKernel(kernel_2D_block_tiling);
+        auto metrics = benchmarkKernel(kernel_naive_column_major, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+    case KernelImpl::SMBC:
+    {
+        auto kernel_smbc = [&]()
+        {
+            matmul_smbc<32><<<gridDimColumnMajor, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
+        auto metrics = benchmarkKernel(kernel_smbc, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+    case KernelImpl::ONE_D_BLOCK_TILING:
+    {
+        auto kernel_1D_block_tiling = [&]()
+        {
+            const int BM = 64, BS = 8, BN = 64, TM = 8;
+            dim3 blockDim(BN, BM / TM);
+            dim3 gridDim(
+                ceil_div(n, BN),
+                ceil_div(m, BM));
+
+            matmul_1D_block_tiling<BM, BS, BN, TM><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
+        auto metrics = benchmarkKernel(kernel_1D_block_tiling, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+    case KernelImpl::TWO_D_BLOCK_TILING:
+    {
+        auto kernel_2D_block_tiling = [&]()
+        {
+            const int BM = 64, BS = 8, BN = 64, TM = 8, TN = 8;
+            dim3 blockDim(BN / TN, BM / TM);
+            dim3 gridDim(
+                ceil_div(n, BN),
+                ceil_div(m, BM));
+
+            matmul_2D_block_tiling<BM, BS, BN, TM, TN><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
+
+        auto metrics = benchmarkKernel(kernel_2D_block_tiling, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+    default:
+    {
+        std::cerr << "Error: Unknown kernel implementation specified" << std::endl;
+        return;
+    }
+    }
+
+    std::cout << "Matmul took " << ms_elapsed << " ms on cuda averaged over "
+                  << ITERATIONS << " iterations" << std::endl;
+        std::cout << "Performance: " << gflops << " GFLOPS" << std::endl;
+
+    const float gflops_percent = gflops / gflops_cublas * 100;
+    std::cout << "gflop percetage achieved: " << gflops_percent << "%" << std::endl;
 
     // cpy output from device to host
     std::vector<float> h_c(m * n);
@@ -202,4 +277,11 @@ int main()
     cudaFree(d_a);
     cudaFree(d_b);
     cudaFree(d_c);
+}
+
+int main()
+{
+    // Pass enum value to function
+    runKernel(KernelImpl::TWO_D_BLOCK_TILING);
+    return 0;
 }
