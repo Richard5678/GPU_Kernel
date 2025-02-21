@@ -12,6 +12,10 @@
 const int ITERATIONS = 10;
 const int WARMUPS = 3;
 
+// Add these color code definitions at the top with other constants
+#define RED "\033[1;31m"
+#define RESET "\033[0m"
+
 enum class KernelImpl
 {
     NAIVE_ROW_MAJOR,
@@ -32,12 +36,14 @@ std::pair<const float, const float> benchmarkKernel(
     const bool printMetrics = false)
 {
     // Warmup runs
-    for (int i = 0; i < warmupRuns; i++) {
+    for (int i = 0; i < warmupRuns; i++)
+    {
         kernelLaunch();
     }
     cudaError_t err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Warmup failed: %s\n", cudaGetErrorString(err));
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, RED "Warmup failed: %s" RESET "\n", cudaGetErrorString(err));
         return std::make_pair(-1.0f, -1.0f);
     }
 
@@ -47,26 +53,29 @@ std::pair<const float, const float> benchmarkKernel(
 
     // Timing runs
     cudaEventRecord(start);
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < iterations; i++)
+    {
         kernelLaunch();
         // Check for errors after each launch
         err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
+        if (err != cudaSuccess)
+        {
+            fprintf(stderr, RED "Kernel launch failed: %s" RESET "\n", cudaGetErrorString(err));
             return std::make_pair(-1.0f, -1.0f);
         }
     }
     cudaEventRecord(end);
-    
+
     err = cudaEventSynchronize(end);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to synchronize: %s\n", cudaGetErrorString(err));
+    if (err != cudaSuccess)
+    {
+        fprintf(stderr, RED "Failed to synchronize: %s" RESET "\n", cudaGetErrorString(err));
         return std::make_pair(-1.0f, -1.0f);
     }
 
     float msElapsed;
     cudaEventElapsedTime(&msElapsed, start, end);
-    
+
     cudaEventDestroy(start);
     cudaEventDestroy(end);
 
@@ -238,7 +247,7 @@ void runKernel(KernelImpl kernel)
     }
     default:
     {
-        std::cerr << "Error: Unknown kernel implementation specified" << std::endl;
+        std::cerr << RED "Error: Unknown kernel implementation specified" RESET << std::endl;
         return;
     }
     }
@@ -279,8 +288,8 @@ void runKernel(KernelImpl kernel)
     }
     else
     {
-        std::cout << "Results dont match!" << std::endl;
-        std::cout << num_mismatch_entries << " mismatch entries found" << std::endl;
+        std::cout << RED "Results dont match!" RESET << std::endl;
+        std::cout << RED << num_mismatch_entries << " mismatch entries found" RESET << std::endl;
     }
 
     cudaFree(d_a);
