@@ -31,40 +31,47 @@ std::pair<const float, const float> benchmarkKernel(
     const int warmupRuns = WARMUPS,
     const bool printMetrics = false)
 {
-    for (int i = 0; i < warmupRuns; i++)
-    {
+    // Warmup runs
+    for (int i = 0; i < warmupRuns; i++) {
         kernelLaunch();
     }
-    cudaDeviceSynchronize();
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Warmup failed: %s\n", cudaGetErrorString(err));
+        return std::make_pair(-1.0f, -1.0f);
+    }
 
     cudaEvent_t start, end;
     cudaEventCreate(&start);
     cudaEventCreate(&end);
 
-    cudaEventRecord(start, 0);
-    for (int i = 0; i < iterations; i++)
-    {
+    // Timing runs
+    cudaEventRecord(start);
+    for (int i = 0; i < iterations; i++) {
         kernelLaunch();
+        // Check for errors after each launch
+        err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            fprintf(stderr, "Kernel launch failed: %s\n", cudaGetErrorString(err));
+            return std::make_pair(-1.0f, -1.0f);
+        }
     }
-    cudaEventRecord(end, 0);
-    cudaEventSynchronize(end);
+    cudaEventRecord(end);
+    
+    err = cudaEventSynchronize(end);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Failed to synchronize: %s\n", cudaGetErrorString(err));
+        return std::make_pair(-1.0f, -1.0f);
+    }
 
-    float msElapsed = 0;
+    float msElapsed;
     cudaEventElapsedTime(&msElapsed, start, end);
-
+    
     cudaEventDestroy(start);
     cudaEventDestroy(end);
 
-    const float avgMsElapsed = msElapsed / iterations;
-
+    float avgMsElapsed = msElapsed / iterations;
     float gflops = calculateGFLOPS(m, n, s, avgMsElapsed);
-
-    if (printMetrics)
-    {
-        std::cout << "Matmul took " << avgMsElapsed << " ms on cuda averaged over "
-                  << iterations << " iterations" << std::endl;
-        std::cout << "Performance: " << gflops << " GFLOPS" << std::endl;
-    }
 
     return std::make_pair(avgMsElapsed, gflops);
 }
@@ -147,8 +154,8 @@ void runKernel(KernelImpl kernel)
     auto [ms_elapsed_cublas, gflops_cublas] = benchmarkKernel(kernel_cublas, m, n, s);
 
     std::cout << "cuBLAS matmul took " << ms_elapsed_cublas << " ms on cuda averaged over "
-                  << ITERATIONS << " iterations" << std::endl;
-        std::cout << "Performance: " << gflops_cublas << " GFLOPS" << std::endl;
+              << ITERATIONS << " iterations" << std::endl;
+    std::cout << "Performance: " << gflops_cublas << " GFLOPS" << std::endl;
 
     dim3 blockDim(32, 32);
     dim3 gridDimRowMajor(
@@ -214,7 +221,9 @@ void runKernel(KernelImpl kernel)
     {
         auto kernel_2D_block_tiling = [&]()
         {
-            const int BM = 64, BS = 8, BN = 64, TM = 8, TN = 8;
+            // const int BM = 64, BS = 8, BN = 64, TM = 8, TN = 8;
+            // const int BM = 128, BN = 128, BS = 16, TM = 8, TN = 8;
+            const int BM = 256, BN = 128, BS = 8, TM = 8, TN = 8;
             dim3 blockDim(BN / TN, BM / TM);
             dim3 gridDim(
                 ceil_div(n, BN),
@@ -235,8 +244,8 @@ void runKernel(KernelImpl kernel)
     }
 
     std::cout << "Matmul took " << ms_elapsed << " ms on cuda averaged over "
-                  << ITERATIONS << " iterations" << std::endl;
-        std::cout << "Performance: " << gflops << " GFLOPS" << std::endl;
+              << ITERATIONS << " iterations" << std::endl;
+    std::cout << "Performance: " << gflops << " GFLOPS" << std::endl;
 
     const float gflops_percent = gflops / gflops_cublas * 100;
     std::cout << "gflop percetage achieved: " << gflops_percent << "%" << std::endl;
@@ -282,7 +291,7 @@ void runKernel(KernelImpl kernel)
 int main()
 {
     // Pass enum value to function
-    // runKernel(KernelImpl::TWO_D_BLOCK_TILING);
-    runKernel(KernelImpl::ONE_D_BLOCK_TILING);
+    runKernel(KernelImpl::TWO_D_BLOCK_TILING);
+    // runKernel(KernelImpl::ONE_D_BLOCK_TILING);
     return 0;
 }
