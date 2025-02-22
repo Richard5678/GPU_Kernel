@@ -97,7 +97,7 @@ template <const int BM, const int BS, const int BN, const int TM>
 __global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int n, int s)
 {
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    const int row = blockIdx.y * BM + threadIdx.y * TM; // row of the first element of the vertical tile
+    const int row = blockIdx.y * BM + threadIdx.y * TM;
 
     __shared__ float As[BM * BS];
     __shared__ float Bs[BS * BN];
@@ -106,16 +106,7 @@ __global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int 
 
     for (int start_idx = 0; start_idx < s; start_idx += BS)
     {
-        // 1D index of the thread in block As
         const int idx_in_block_a = threadIdx.x * BS + threadIdx.y;
-
-        // For matrix A:
-        //      - row index is 'blockIdx.y * BM + threadIdx.x'
-        //          - 'blockIdx.y * BM' -> row index of the frist row of the block
-        //          - 'threadIdx.x' -> row index of the thread in the block
-        //      - col index is 'start_idx + threadIdx.y'
-        //          - 'start_idx' -> col index of the first column in the block
-        //          - 'threadIdx.y' -> col index of the thread in the block
         if ((blockIdx.y * BM + threadIdx.x) < m && (start_idx + threadIdx.y) < s)
         {
             As[idx_in_block_a] = A[(blockIdx.y * BM + threadIdx.x) * s + (start_idx + threadIdx.y)];
@@ -125,14 +116,7 @@ __global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int 
             As[idx_in_block_a] = 0.0f;
         }
 
-        // 1D index of the thread in block Bs
         const int idx_in_block_b = threadIdx.y * BN + threadIdx.x;
-
-        // For matrix B:
-        //      - row index is 'start_idx + threadIdx.y'
-        //          - 'start_idx' -> row index of the frist row of the block
-        //          - 'threadIdx.y' -> row index of the thread in the block
-        //      - col index is 'col'
         if ((start_idx + threadIdx.y) < s && col < n)
         {
             Bs[idx_in_block_b] = B[(start_idx + threadIdx.y) * n + col];
@@ -144,7 +128,6 @@ __global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int 
 
         __syncthreads();
 
-        // accumulate partial dot product for the current 1D vertile block tile
         for (int i = 0; i < BS; i++)
         {
             const float B_val = Bs[i * BN + threadIdx.x];
@@ -157,15 +140,190 @@ __global__ void matmul_1D_block_tiling(float *A, float *B, float *C, int m, int 
         __syncthreads();
     }
 
-    // update output of the 1D vertical block tile if within bound
+    // Add bounds checking when writing output
     for (int j = 0; j < TM; j++)
     {
-        if (row + j < m && col < n) // bounds check here
+        if (row + j < m && col < n) // Add bounds check here
         {
             C[(row + j) * n + col] = output[j];
         }
     }
 }
+
+// 1D block tiling
+//      - blockDim(BN, BM / TM)
+//      - gridDim(N / BN, M / BM)
+// requires:
+//      - BN * BM / TM >= min(BM * BS, BS * BN)
+template <const int BM, const int BS, const int BN, const int TM>
+__global__ void matmul_1D_block_tiling_optimized(float *A, float *B, float *C, int m, int n, int s)
+{
+    // load threads with adjacent tid to allow memory coalescing
+    const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+
+    const int threadRowA = tid / BS;
+    const int threadColA = tid % BS;
+    const int blockRowA = blockIdx.y * BM;
+
+    const int threadRowB = tid / BN;
+    const int threadColB = tid % BN;
+    const int blockColB = blockIdx.x * BN;
+
+    __shared__ float As[BM * BS];
+    __shared__ float Bs[BS * BN];
+
+    float tileOutput[TM] = {0.0f};
+
+    for (int start_idx = 0; start_idx < s; start_idx += BS)
+    {
+        // check bounds
+        if (blockRowA + threadRowA < m && start_idx + threadColA < s)
+        {
+            As[threadRowA * BS + threadColA] = A[(blockRowA + threadRowA) * s + (start_idx + threadColA)];
+        }
+        else
+        {
+            As[threadRowA * BS + threadColA] = 0.0f;
+        }
+
+        // check bounds
+        if ((start_idx + threadRowB) < s && (blockColB + threadColB) < n)
+        {
+            Bs[threadRowB * BN + threadColB] = B[(start_idx + threadRowB) * n + (blockColB + threadColB)];
+        }
+        else
+        {
+            Bs[threadRowB * BN + threadColB] = 0.0f;
+        }
+
+        __syncthreads();
+
+        // accumulate partial dot product for the current 1D vertile block tile
+        for (int bsOffset = 0; bsOffset < BS; bsOffset++)
+        {
+            const float B_val = Bs[bsOffset * BN + threadIdx.x];
+            for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+            {
+                tileOutput[tmOffset] += As[(threadIdx.y * TM + tmOffset) * BS + bsOffset] * B_val;
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // update output of the 1D vertical block tile if within bound
+    for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+    {
+        const int rowC = blockRowA + threadIdx.y * TM + tmOffset;
+        const int colC = blockColB + threadIdx.x;
+        if (rowC < m && colC < n) // bounds check here
+        {
+            C[rowC * n + colC] = tileOutput[tmOffset];
+        }
+    }
+}
+
+// // 2D block tiling
+// //      - blockDim(BN / TN, BM / TM)
+// //      - gridDim(N / BN, M / BM)
+// // requires:
+// //      - BS <= min(BN / TN, BM / TM)
+// template <const int BM, const int BS, const int BN, const int TM, const int TN>
+// __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int n, int s)
+// {
+//     const int blockRow_a = blockIdx.y * BM;
+//     const int threadCol_a = threadIdx.x;
+//     const int threadRow_a = threadIdx.y * TM;
+
+//     const int blockCol_b = blockIdx.x * BN;
+//     const int threadRow_b = threadIdx.y;
+//     const int threadCol_b = threadIdx.x * TN;
+
+//     __shared__ float As[BM * BS];
+//     __shared__ float Bs[BS * BN];
+
+//     float output[TM * TN] = {0.0f};
+
+//     for (int start_idx = 0; start_idx < s; start_idx += BS)
+//     {
+//         // load block tiles into shared memory
+//         const int blockCol_a = start_idx;
+//         for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+//         {
+//             const int row_a = blockRow_a + threadRow_a + tmOffset;
+//             const int col_a = blockCol_a + threadCol_a;
+//             if (threadCol_a < BS && row_a < m && col_a < s)
+//             {
+//                 As[(threadRow_a + tmOffset) * BS + threadCol_a] = A[row_a * s + col_a];
+//             }
+//             else if (threadCol_a < BS && threadRow_a + tmOffset < BM && threadCol_a < BS)
+//             {
+//                 As[(threadRow_a + tmOffset) * BS + threadCol_a] = 0.0f;
+//             }
+//         }
+
+//         const int blockRow_b = start_idx;
+//         for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+//         {
+//             const int row_b = blockRow_b + threadRow_b;
+//             const int col_b = blockCol_b + threadCol_b + tnOffset;
+//             if (threadRow_b < BS && row_b < s && col_b < n)
+//             {
+//                 Bs[threadRow_b * BN + (threadCol_b + tnOffset)] = B[row_b * n + col_b];
+//             }
+//             else if (threadRow_b < BS && threadRow_b < BS && threadCol_b + tnOffset < BN)
+//             {
+//                 Bs[threadRow_b * BN + (threadCol_b + tnOffset)] = 0.0f;
+//             }
+//         }
+
+//         __syncthreads();
+
+// // Optimized computation loop
+// #pragma unroll
+//         for (int bsOffset = 0; bsOffset < BS; bsOffset++)
+//         {
+//             // Load B values into registers once
+//             float regB[TN];
+
+// #pragma unroll
+//             for (int tn = 0; tn < TN; tn++)
+//             {
+//                 regB[tn] = Bs[bsOffset * BN + (threadCol_b + tn)];
+//             }
+
+// // Process one row of A at a time
+// #pragma unroll
+//             for (int tm = 0; tm < TM; tm++)
+//             {
+//                 float regA = As[(threadRow_a + tm) * BS + bsOffset];
+
+// // Multiply with all columns of B
+// #pragma unroll
+//                 for (int tn = 0; tn < TN; tn++)
+//                 {
+//                     output[tm * TN + tn] += regA * regB[tn];
+//                 }
+//             }
+//         }
+
+//         __syncthreads();
+//     }
+
+//     // move tile output to global output
+//     for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+//     {
+//         for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+//         {
+//             const int row_c = blockRow_a + threadRow_a + tmOffset;
+//             const int col_c = blockCol_b + threadCol_b + tnOffset;
+//             if (row_c < m && col_c < n)
+//             {
+//                 C[row_c * n + col_c] = output[tmOffset * TN + tnOffset];
+//             }
+//         }
+//     }
+// }
 
 // 2D block tiling
 //      - blockDim(BN / TN, BM / TM)
@@ -187,6 +345,8 @@ __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int 
     __shared__ float Bs[BS * BN];
 
     float output[TM * TN] = {0.0f};
+    float regM[TM] = {0.0f};
+    float regN[TN] = {0.0f};
 
     for (int start_idx = 0; start_idx < s; start_idx += BS)
     {
@@ -223,30 +383,30 @@ __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int 
 
         __syncthreads();
 
-// Optimized computation loop
-#pragma unroll
+        // accumulate partial dot product for 2D block tile
         for (int bsOffset = 0; bsOffset < BS; bsOffset++)
         {
-            // Load B values into registers once
-            float regB[TN];
-
-#pragma unroll
-            for (int tn = 0; tn < TN; tn++)
+            for (int tmOffset = 0; tmOffset < TM; tmOffset++)
             {
-                regB[tn] = Bs[bsOffset * BN + (threadCol_b + tn)];
+                if (threadRow_a + tmOffset < BM)
+                {
+                    regM[tmOffset] = As[(threadRow_a + tmOffset) * BS + bsOffset];
+                }
             }
 
-// Process one row of A at a time
-#pragma unroll
-            for (int tm = 0; tm < TM; tm++)
+            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
             {
-                float regA = As[(threadRow_a + tm) * BS + bsOffset];
-
-// Multiply with all columns of B
-#pragma unroll
-                for (int tn = 0; tn < TN; tn++)
+                if (threadCol_b + tnOffset < BN)
                 {
-                    output[tm * TN + tn] += regA * regB[tn];
+                    regN[tnOffset] = Bs[bsOffset * BN + (threadCol_b + tnOffset)];
+                }
+            }
+
+            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+            {
+                for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+                {
+                    output[tmOffset * TN + tnOffset] += regM[tmOffset] * regN[tnOffset];
                 }
             }
         }
