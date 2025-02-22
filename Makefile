@@ -33,7 +33,7 @@ help:
 # Pattern rule for CUDA files
 %: %$(CU_EXT)
 	$(NVCC) $(NVCC_FLAGS) $(ARCH) $< -o $(BUILD_DIR)/$@ 
-	echo "Compiled $(BUILD_DIR)/$@"
+	@echo "Compiled $(BUILD_DIR)/$@"
 
 # Run compiled executable
 .PHONY: run
@@ -42,8 +42,8 @@ run:
 	@if [ -f "$(BUILD_DIR)/$(word 2,$(MAKECMDGOALS))" ]; then \
 		./$(BUILD_DIR)/$(word 2,$(MAKECMDGOALS)); \
 	else \
-		echo "Executable $(word 2,$(MAKECMDGOALS)) not found in build directory."; \
-		echo "Compiling first..."; \
+		@echo "Executable $(word 2,$(MAKECMDGOALS)) not found in build directory."; \
+		@echo "Compiling first..."; \
 		$(MAKE) $(word 2,$(MAKECMDGOALS)) && ./$(BUILD_DIR)/$(word 2,$(MAKECMDGOALS)); \
 	fi
 
