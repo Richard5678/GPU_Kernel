@@ -22,6 +22,7 @@ enum class KernelImpl
     NAIVE_COLUMN_MAJOR,
     SMBC,
     ONE_D_BLOCK_TILING,
+    ONE_D_BLOCK_TILING_OPT,
     TWO_D_BLOCK_TILING,
 };
 
@@ -87,11 +88,15 @@ std::pair<const float, const float> benchmarkKernel(
 
 void runKernel(KernelImpl kernel)
 {
-    int m = 5120, s = 5120, n = 5120;
+    // int m = 5120, s = 5120, n = 5120;
+    int m = 4096, s = 4096, n = 4096;
     // int m = 1000, s = 500, n = 700;
     // int m = 73, s = 150, n = 351;
     // int m = 130, s = 130, n = 130;
-    // const int m = 10, s = 5, n = 7;
+    // int m = 64, s = 64, n = 64; // full block test
+    // int m = 64, s = 8, n = 64;
+    // int m = 128, s = 64, n = 64;
+    // const int m = 10, s = 5, n = 7; // tiny test
     const unsigned int SEED = 42;
 
     std::vector<float> A(m * s);
@@ -226,13 +231,30 @@ void runKernel(KernelImpl kernel)
         ms_elapsed = metrics.first, gflops = metrics.second;
         break;
     }
+    case KernelImpl::ONE_D_BLOCK_TILING_OPT:
+    {
+        auto kernel_1D_block_tiling_optimized = [&]()
+        {
+            const int BM = 64, BS = 8, BN = 64, TM = 8;
+            dim3 blockDim(BN, BM / TM);
+            dim3 gridDim(
+                ceil_div(n, BN),
+                ceil_div(m, BM));
+
+            matmul_1D_block_tiling_optimized<BM, BS, BN, TM><<<gridDim, blockDim>>>(d_a, d_b, d_c, m, n, s);
+        };
+        auto metrics = benchmarkKernel(kernel_1D_block_tiling_optimized, m, n, s);
+        ms_elapsed = metrics.first, gflops = metrics.second;
+        break;
+    }
+
     case KernelImpl::TWO_D_BLOCK_TILING:
     {
         auto kernel_2D_block_tiling = [&]()
         {
             // const int BM = 64, BS = 8, BN = 64, TM = 8, TN = 8;
-            // const int BM = 128, BN = 128, BS = 16, TM = 8, TN = 8;
-            const int BM = 256, BN = 128, BS = 8, TM = 8, TN = 8;
+            // const int BM = 128, BN = 128, BS = 8, TM = 8, TN = 8;
+            const int BM = 128, BN = 128, BS = 16, TM = 8, TN = 8;
             dim3 blockDim(BN / TN, BM / TM);
             dim3 gridDim(
                 ceil_div(n, BN),
@@ -300,7 +322,8 @@ void runKernel(KernelImpl kernel)
 int main()
 {
     // Pass enum value to function
-    runKernel(KernelImpl::TWO_D_BLOCK_TILING);
+    // runKernel(KernelImpl::TWO_D_BLOCK_TILING);
     // runKernel(KernelImpl::ONE_D_BLOCK_TILING);
+    runKernel(KernelImpl::ONE_D_BLOCK_TILING_OPT); // optimized version
     return 0;
 }
