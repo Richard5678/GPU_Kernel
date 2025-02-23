@@ -432,3 +432,114 @@ __global__ void matmul_2D_block_tiling(float *A, float *B, float *C, int m, int 
         }
     }
 }
+
+
+// 2D block tiling
+//      - blockDim(BN / TN, BM / TM)
+//      - gridDim(N / BN, M / BM)
+// requires:
+//      - blockDim.x * blockDim.y * TM >= max(BM * BS, BS * BN) 
+//      - BS <= min(BN / TN, BM / TM)
+template <const int BM, const int BS, const int BN, const int TM, const int TN>
+__global__ void matmul_2D_block_tiling_optimized(float *A, float *B, float *C, int m, int n, int s)
+{
+    const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    
+    const int blockRowA = blockIdx.y * BM;
+    const int threadRowA = (tid / BS) * TM;
+    const int threadColA = tid % BS;
+
+    const int blockColB = blockIdx.x * BN;
+    const int threadRowB = tid / BN;
+    const int threadColB = (tid % BN) * TN;
+    
+    __shared__ float As[BM * BS];
+    __shared__ float Bs[BS * BN];
+
+    float output[TM * TN] = {0.0f};
+    float regM[TM] = {0.0f};
+    float regN[TN] = {0.0f};
+
+    for (int start_idx = 0; start_idx < s; start_idx += BS)
+    {
+        // load block tiles from A into shared memory As
+        //      - each thread is responsible for 1 vertical tile of size TM
+        const int blockColA = start_idx;
+        for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+        {
+            const int rowA = blockRowA + threadRowA + tmOffset;
+            const int colA = blockColA + threadColA;
+            if (threadRowA < BM && rowA < m && colA < s)
+            {
+                As[(threadRowA + tmOffset) * BS + threadColA] = A[rowA * s + colA];
+            }
+            else if (threadRowA + tmOffset < BM && threadColA < BS)
+            {
+                As[(threadRowA + tmOffset) * BS + threadColA] = 0.0f;
+            }
+        }
+
+        // load block tiles from B into shared memory Bs
+        //      - each thread is responsible for a 1 horizontal tile of size TN
+        const int blockRowB = start_idx;
+        for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+        {
+            const int rowB = blockRowB + threadRowB;
+            const int colB = blockColB + threadColB + tnOffset;
+            if (threadColB < BN && rowB < s && colB < n)
+            {
+                Bs[threadRowB * BN + (threadColB + tnOffset)] = B[rowB * n + colB];
+            }
+            else if (threadRowB < BN && threadColB + tnOffset < BN)
+            {
+                Bs[threadRowB * BN + (threadColB + tnOffset)] = 0.0f;
+            }
+        }
+
+        __syncthreads();
+
+        // accumulate partial dot product for 2D block tile
+        for (int bsOffset = 0; bsOffset < BS; bsOffset++)
+        {
+            for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+            {
+                if (threadRowA + tmOffset < BM)
+                {
+                    regM[tmOffset] = As[(threadRowA + tmOffset) * BS + bsOffset];
+                }
+            }
+
+            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+            {
+                if (threadColB + tnOffset < BN)
+                {
+                    regN[tnOffset] = Bs[bsOffset * BN + (threadColB + tnOffset)];
+                }
+            }
+
+            for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+            {
+                for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+                {
+                    output[tmOffset * TN + tnOffset] += regM[tmOffset] * regN[tnOffset];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // move tile output to global output
+    for (int tmOffset = 0; tmOffset < TM; tmOffset++)
+    {
+        for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+        {
+            const int rowC = blockRowA + threadRowA + tmOffset;
+            const int colC = blockColB + threadColB + tnOffset;
+            if (rowC < m && colC < n)
+            {
+                C[rowC * n + colC] = output[tmOffset * TN + tnOffset];
+            }
+        }
+    }
+}
