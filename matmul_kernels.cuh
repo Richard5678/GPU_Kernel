@@ -450,8 +450,8 @@ __global__ void matmul_2D_block_tiling_optimized(float *A, float *B, float *C, i
     const int threadColA = tid % BS;
 
     const int blockColB = blockIdx.x * BN;
-    const int threadRowB = tid / BN;
-    const int threadColB = (tid % BN) * TN;
+    const int threadRowB = tid / (BN / TN);
+    const int threadColB = (tid % (BN / TM)) * TN;
     
     __shared__ float As[BM * BS];
     __shared__ float Bs[BS * BN];
@@ -486,11 +486,11 @@ __global__ void matmul_2D_block_tiling_optimized(float *A, float *B, float *C, i
         {
             const int rowB = blockRowB + threadRowB;
             const int colB = blockColB + threadColB + tnOffset;
-            if (threadColB < BN && rowB < s && colB < n)
+            if (threadRowB < BS && rowB < s && colB < n)
             {
                 Bs[threadRowB * BN + (threadColB + tnOffset)] = B[rowB * n + colB];
             }
-            else if (threadRowB < BN && threadColB + tnOffset < BN)
+            else if (threadRowB < BS && threadColB + tnOffset < BN)
             {
                 Bs[threadRowB * BN + (threadColB + tnOffset)] = 0.0f;
             }
