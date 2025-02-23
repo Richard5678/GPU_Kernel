@@ -201,10 +201,12 @@ __global__ void matmul_1D_block_tiling_optimized(float *A, float *B, float *C, i
         // accumulate partial dot product for the current 1D vertile block tile
         for (int bsOffset = 0; bsOffset < BS; bsOffset++)
         {
-            const float B_val = Bs[bsOffset * BN + threadIdx.x];
+            const float B_val = Bs[bsOffset * BN + threadColB];
             for (int tmOffset = 0; tmOffset < TM; tmOffset++)
             {
-                tileOutput[tmOffset] += As[(threadIdx.y * TM + tmOffset) * BS + bsOffset] * B_val;
+                // only update tile output if current row is at the start of a vertical tile
+                if (threadRowA % TM == 0)
+                    tileOutput[tmOffset] += As[(threadRowA + tmOffset) * BS + bsOffset] * B_val;
             }
         }
 
@@ -214,14 +216,16 @@ __global__ void matmul_1D_block_tiling_optimized(float *A, float *B, float *C, i
     // update output of the 1D vertical block tile if within bound
     for (int tmOffset = 0; tmOffset < TM; tmOffset++)
     {
-        const int rowC = blockRowA + threadIdx.y * TM + tmOffset;
-        const int colC = blockColB + threadIdx.x;
-        if (rowC < m && colC < n) // bounds check here
+        const int rowC = blockRowA + threadRowA + tmOffset;
+        const int colC = blockColB + threadColB;
+        if (threadRowA % TM == 0 && rowC < m && colC < n) // bounds check here
         {
             C[rowC * n + colC] = tileOutput[tmOffset];
         }
     }
 }
+
+
 
 // // 2D block tiling
 // //      - blockDim(BN / TN, BM / TM)
