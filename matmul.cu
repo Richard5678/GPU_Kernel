@@ -90,14 +90,14 @@ std::pair<const float, const float> benchmarkKernel(
 void runKernel(KernelImpl kernel)
 {
     // int m = 5120, s = 5120, n = 5120;
-    // int m = 4096, s = 4096, n = 4096;
+    int m = 4096, s = 4096, n = 4096;
     // int m = 1000, s = 500, n = 700;
     // int m = 73, s = 150, n = 351;
     // int m = 130, s = 130, n = 130;
     // int m = 64, s = 64, n = 64; // full block test
     // int m = 64, s = 8, n = 64;
     // int m = 128, s = 64, n = 64;
-    const int m = 10, s = 5, n = 7; // tiny test
+    // const int m = 10, s = 5, n = 7; // tiny test
     const unsigned int SEED = 42;
 
     std::vector<float> A(m * s);
