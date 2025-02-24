@@ -450,7 +450,9 @@ __global__ void matmul_2D_block_tiling_optimized(float *A, float *B, float *C, i
     const int threadColA = tid % BS;
 
     const int blockColB = blockIdx.x * BN;
-    const int threadRowB = tid / (BN / TN);
+    // const int threadRowB = tid / BN;
+    // const int threadColB = tid % BN;
+    // const int threadRowB = tid / (BN / TN);
     const int threadColB = (tid % (BN / TM)) * TN;
     
     __shared__ float As[BM * BS];
@@ -479,20 +481,18 @@ __global__ void matmul_2D_block_tiling_optimized(float *A, float *B, float *C, i
             }
         }
 
-        // load block tiles from B into shared memory Bs
-        //      - each thread is responsible for a 1 horizontal tile of size TN
         const int blockRowB = start_idx;
-        for (int tnOffset = 0; tnOffset < TN; tnOffset++)
+        for (int bsOffset = 0; bsOffset < BS; bsOffset++)
         {
-            const int rowB = blockRowB + threadRowB;
-            const int colB = blockColB + threadColB + tnOffset;
-            if (threadRowB < BS && rowB < s && colB < n)
+            const int rowB = blockRowB + bsOffset;
+            const int colB = blockColB + tid % BN;
+            if (rowB < s && colB < n)
             {
-                Bs[threadRowB * BN + (threadColB + tnOffset)] = B[rowB * n + colB];
+                Bs[bsOffset * BN + tid % BN] = B[rowB * n + colB];
             }
-            else if (threadRowB < BS && threadColB + tnOffset < BN)
+            else
             {
-                Bs[threadRowB * BN + (threadColB + tnOffset)] = 0.0f;
+                Bs[bsOffset * BN + tid % BN] = 0;
             }
         }
 
